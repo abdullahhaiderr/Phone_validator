@@ -6,17 +6,34 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 let serviceClient: SupabaseClient | null = null;
 
+const PROJECT_URL = "https://mjputemvqnycjnugahog.supabase.co";
+
+function resolveSupabaseUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+
+  if (raw && /^https?:\/\//i.test(raw)) {
+    return raw.replace(/\/+$/, "");
+  }
+
+  return PROJECT_URL;
+}
+
 /** Service-role client: bypasses RLS, used by all API routes for reads/writes. */
 export function getServiceClient(): SupabaseClient {
   if (!serviceClient) {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !key) {
+    const url = resolveSupabaseUrl();
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+
+    if (!key) {
       throw new Error(
-        "Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY — check your .env.local / Vercel env vars."
+        "Missing SUPABASE_SERVICE_ROLE_KEY — check your Vercel environment variables."
       );
     }
-    serviceClient = createClient(url, key, { auth: { persistSession: false } });
+
+    serviceClient = createClient(url, key, {
+      auth: { persistSession: false },
+    });
   }
+
   return serviceClient;
 }
