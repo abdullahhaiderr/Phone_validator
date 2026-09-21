@@ -6,6 +6,7 @@ import { LineTypeBadge, ValidBadge } from "./badges";
 interface LookupResult {
   original: string;
   formatted: string;
+  cleaned: string;
   isValid: boolean;
   lineType: string | null;
   state: string | null;
