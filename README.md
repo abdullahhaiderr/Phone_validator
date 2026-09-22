@@ -1,5 +1,17 @@
 # US Phone Number Validator & Classifier Dashboard
 
+## Accuracy update
+
+- Validation now uses pinned `libphonenumber-js/max` numbering metadata, rejects reserved fictional numbers and service exchanges, and accepts US numbers only. `Valid` does **not** prove a number is assigned, active or reachable. Non-US +1 numbers are outside this app's scope.
+- Full-number parsing handles extensions and exact Excel integer/scientific notation. Precision already lost by a spreadsheet cannot be recovered.
+- CLEC and reseller business categories do not establish VoIP. Legacy `tel-carrier-db` VoIP rows were created with that guess, so they are treated as unknown until replaced by explicit type data. Existing uploaded results are historical; upload again to apply the new logic.
+- Missing carrier prefixes remain unknown. A current, number-level carrier provider is required for reliable ported-number classification. Do not classify an entire prefix using one representative number. No paid lookup is enabled by this update.
+- Area-code CSV import supports quoted, headerless data, keeps the first row and rejects empty imports. Geography is an original assignment estimate; cities are omitted when an area code spans multiple cities. The public dataset is incomplete and does not establish current location.
+- CSV export continues until the database returns an empty page, including when the server imposes a smaller page limit.
+- Run `npm test` and `npm run build` before deploying. Refresh numbering metadata regularly via a reviewed dependency update.
+
+The older setup notes below describe the original architecture; use the accuracy rules above where they differ.
+
 Upload a CSV or Excel file full of US phone numbers and get, for every row:
 
 - ✅ **Valid / Invalid** — strict 10-digit NANP validation (after cleaning)

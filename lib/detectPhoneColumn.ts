@@ -8,6 +8,8 @@
  * Returns the winning column index, or -1 if nothing looks like phone numbers.
  */
 
+import { cleanPhone } from "./phone";
+
 const HEADER_KEYWORDS = [
   "phone",
   "number",
@@ -24,7 +26,7 @@ export function rowLooksLikeHeader(row: unknown[] | undefined, col: number): boo
   if (!row) return false;
   const v = String(row[col] ?? "").trim();
   // A header cell usually contains letters; a phone number doesn't.
-  return /[a-z]/i.test(v);
+  return !/^\d{10}$/.test(cleanPhone(v)) && /[a-z]/i.test(v);
 }
 
 export function detectPhoneColumn(grid: unknown[][]): number {
@@ -49,8 +51,8 @@ export function detectPhoneColumn(grid: unknown[][]): number {
       const v = String(row[c] ?? "").trim();
       if (!v) continue;
       nonempty++;
-      const digits = v.replace(/\D/g, "");
-      if (digits.length === 10 || (digits.length === 11 && digits.startsWith("1"))) phoneish++;
+      const digits = cleanPhone(v);
+      if (digits.length === 10) phoneish++;
     }
     if (nonempty) score += phoneish / nonempty;
 

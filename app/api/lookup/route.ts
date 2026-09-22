@@ -28,8 +28,12 @@ export async function POST(req: Request) {
       state: result.state,
       city: result.city,
       disclaimer:
-        "Line type is a block-level estimate from free public data, not a live carrier lookup. " +
-        "State reflects the original area-code assignment; numbers can be ported.",
+        (!result.is_valid
+          ? "Not a supported US number in the current numbering metadata, or a reserved/invalid number. "
+          : result.line_type === "unknown"
+            ? "US numbering rules passed, but the reference data cannot reliably identify the line type. A number-level carrier lookup is required. "
+            : "Line type is an original block estimate, not a verified current carrier. ") +
+        "Valid does not mean active or reachable. State is the original area-code assignment; city is omitted when an area code covers multiple cities.",
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message ?? "Lookup failed" }, { status: 500 });

@@ -28,7 +28,7 @@ export async function GET(req: Request) {
   const supabase = getServiceClient();
   const lines: string[] = [CSV_HEADER];
   let lastId = 0;
-  const CHUNK = 10000;
+  const CHUNK = 1000;
 
   // safety valve so a pathological upload can't run forever inside one call
   while (lines.length < 500000) {
@@ -53,7 +53,7 @@ export async function GET(req: Request) {
       );
     }
     lastId = data[data.length - 1].id;
-    if (data.length < CHUNK) break;
+    // PostgREST may cap pages below our requested limit. Continue by ID until empty.
   }
 
   const csv = lines.join("\n");

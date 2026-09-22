@@ -18,6 +18,9 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+    if (rows.length > MAX_BATCH) {
+      return NextResponse.json({ error: `Maximum batch size is ${MAX_BATCH}` }, { status: 400 });
+    }
 
     const batch = rows.slice(0, MAX_BATCH).map((r) => String(r ?? ""));
     const supabase = getServiceClient();

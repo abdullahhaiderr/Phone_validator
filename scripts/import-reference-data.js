@@ -27,6 +27,8 @@
 
 const fs = require("fs");
 const path = require("path");
+const { parseAreaCodes, normalizeTelCarrierData } = require("./reference-parsers");
+const { mapCarrierTypeToLineType } = require("../lib/carrierTypes");
 
 /* ── tiny .env loader (no dotenv dependency) ─────────────────────────────── */
 function loadEnv() {
@@ -75,7 +77,7 @@ async function fetchText(urls, label) {
         if (!fs.existsSync(url)) throw new Error("file not found");
         return fs.readFileSync(url, "utf8");
       }
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.text();
     } catch (e) {
@@ -102,19 +104,7 @@ async function upsertChunked(table, rows, onConflict, chunkSize = 1000) {
 async function importAreaCodes() {
   console.log("\n[1/2] Importing area code → state/city …");
   const text = await fetchText(AREA_CODE_SOURCES, "area code CSV");
-  const lines = text.split(/\r?\n/).filter((l) => l.trim());
-  const rows = [];
-  for (const line of lines.slice(1)) {                       // skip header
-    const c = line.split(",");
-    const areaCode = (c[0] || "").trim();
-    if (!/^\d{3}$/.test(areaCode)) continue;                 // keep only real NPAs
-    rows.push({
-      area_code: areaCode,
-      city: (c[1] || "").trim(),
-      state: (c[2] || "").trim(),
-      country: (c[3] || "US").trim() || "US",
-    });
-  }
+  const rows = parseAreaCodes(text);
   console.log(`  Parsed ${rows.length} area-code rows. Upserting …`);
   await upsertChunked("area_code_state", rows, "area_code,city,state");
   console.log("  ✓ area_code_state done");
@@ -126,48 +116,12 @@ async function importAreaCodes() {
    tel-carrier-db type labels look like:
      WIRELESS, WIRELESS PROV  → cellular
      RBOC, LEC, ILEC          → landline
-     CLEC, RESELLER, VOIP     → voip   (best-effort — see disclaimer)
+     VOIP                    → voip
+     CLEC, RESELLER           → unknown (business category is ambiguous)
      anything else / missing  → unknown
 
    NOTE: keep this mapping in sync with lib/classifyLineType.ts
    ═════════════════════════════════════════════════════════════════════════ */
-function mapCarrierTypeToLineType(raw) {
-  if (!raw) return "unknown";
-  const t = String(raw).toUpperCase();
-  if (t.includes("WIRELESS")) return "cellular";
-  if (t.includes("VOIP")) return "voip";
-  if (t.includes("CLEC") || t.includes("RESELLER")) return "voip";
-  if (t.includes("RBOC") || t.includes("ILEC") || t.includes("LEC") ||
-      t.includes("WIRELINE") || t.includes("TELCO") || t.includes("RURAL")) return "landline";
-  return "unknown";
-}
-
-/** Accept several plausible data.json shapes and normalise to { npaNxx: type } */
-function normalizeTelCarrierData(json) {
-  const out = {};
-  if (Array.isArray(json)) {
-    for (const item of json) {
-      const key = item.npa_nxx || item.npanxx || item.block ||
-        (item.npa && item.nxx ? `${item.npa}${item.nxx}` : null);
-      const type = item.type || item.category || item.carrier_type || item.line_type || null;
-      if (key && /^\d{6}$/.test(String(key))) out[String(key)] = type;
-    }
-  } else if (json && typeof json === "object") {
-    for (const [k, v] of Object.entries(json)) {
-      if (/^\d{6}$/.test(k)) {
-        out[k] = typeof v === "string" ? v : (v && (v.type || v.category || v.line_type)) || null;
-      } else if (v && typeof v === "object") {
-        // shape like { "wireless": {"415555": true, ...}, ... } — type-as-key containers
-        const type = k;
-        for (const inner of Object.keys(v)) {
-          if (/^\d{6}$/.test(inner)) out[inner] = type;
-        }
-      }
-    }
-  }
-  return out;
-}
-
 async function importNpaNxx() {
   console.log("\n[2/2] Importing NPA-NXX → line type …");
   const text = await fetchText(TEL_CARRIER_SOURCES, "tel-carrier-db data");
@@ -177,9 +131,12 @@ async function importNpaNxx() {
   const rows = entries.map(([npaNxx, rawType]) => ({
     npa_nxx: npaNxx,
     line_type: mapCarrierTypeToLineType(rawType),
-    source: "tel-carrier-db",
+    source: "tel-carrier-db:explicit-label-v2",
     last_updated: new Date().toISOString(),
   }));
+  if (!rows.some(row => row.line_type !== "unknown")) {
+    throw new Error("Dataset has no recognized line-type labels; refusing to overwrite reference data");
+  }
   await upsertChunked("npa_nxx_line_type", rows, "npa_nxx");
   console.log("  ✓ npa_nxx_line_type done");
 }

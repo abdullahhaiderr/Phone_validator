@@ -14,7 +14,9 @@ export default function Home() {
       <footer className="mt-10 border-t border-slate-800 pt-4 text-xs text-slate-500">
         Line-type classification is a block-level estimate from free public NPA-NXX data, not a live
         carrier lookup. Area codes show where a number was originally assigned; numbers can be ported.
-        VoIP detection from free data is best-effort.
+        Valid means US numbering rules passed, not that the number is active. Unknown means the
+        reference data cannot reliably identify the type. Ambiguous carrier categories are not
+        treated as proof of VoIP. City is omitted where an area code covers multiple cities.
       </footer>
     </main>
   );

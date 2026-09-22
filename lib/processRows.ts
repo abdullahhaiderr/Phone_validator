@@ -35,12 +35,15 @@ async function loadLineTypes(npaNxxList: string[]): Promise<Map<string, LineType
   for (let i = 0; i < npaNxxList.length; i += IN_CHUNK) {
     const { data, error } = await supabase
       .from("npa_nxx_line_type")
-      .select("npa_nxx, line_type")
+      .select("npa_nxx, line_type, source")
       .in("npa_nxx", npaNxxList.slice(i, i + IN_CHUNK));
     if (error) throw new Error(`npa_nxx_line_type lookup failed: ${error.message}`);
     for (const row of data ?? []) {
       const existing = map.get(row.npa_nxx);
-      const incoming = row.line_type as LineType;
+      // Legacy importer guessed CLEC/reseller = VoIP and discarded the raw label.
+      // Without provenance those rows cannot safely assert VoIP.
+      const incoming: LineType = row.source === "tel-carrier-db" && row.line_type === "voip"
+        ? "unknown" : row.line_type as LineType;
       // keep highest-priority classification if the block appears more than once
       if (!existing || LINE_TYPE_PRIORITY[incoming] < LINE_TYPE_PRIORITY[existing]) {
         map.set(row.npa_nxx, incoming);
@@ -50,20 +53,35 @@ async function loadLineTypes(npaNxxList: string[]): Promise<Map<string, LineType
   return map;
 }
 
-async function loadAreaCodes(npaList: string[]): Promise<Map<string, { state: string; city: string }>> {
+async function loadAreaCodes(npaList: string[]): Promise<Map<string, { state: string | null; city: string | null }>> {
   const supabase = getServiceClient();
-  const map = new Map<string, { state: string; city: string }>();
-  for (let i = 0; i < npaList.length; i += IN_CHUNK) {
-    const { data, error } = await supabase
-      .from("area_code_state")
-      .select("area_code, state, city")
-      .in("area_code", npaList.slice(i, i + IN_CHUNK));
-    if (error) throw new Error(`area_code_state lookup failed: ${error.message}`);
-    for (const row of data ?? []) {
-      if (!map.has(row.area_code)) map.set(row.area_code, { state: row.state, city: row.city });
+  const groups = new Map<string, { states: Set<string>; cities: Set<string> }>();
+  // Area codes have many city rows. Page explicitly rather than losing rows to
+  // PostgREST's response cap, and never select an arbitrary city as a location.
+  for (let i = 0; i < npaList.length; i += 20) {
+    let offset = 0;
+    while (true) {
+      const { data, error } = await supabase.from("area_code_state")
+        .select("area_code, state, city")
+        .eq("country", "US")
+        .in("area_code", npaList.slice(i, i + 20))
+        .order("area_code").order("state").order("city")
+        .range(offset, offset + 499);
+      if (error) throw new Error(`area_code_state lookup failed: ${error.message}`);
+      if (!data?.length) break;
+      for (const row of data) {
+        const group = groups.get(row.area_code) ?? { states: new Set<string>(), cities: new Set<string>() };
+        group.states.add(row.state);
+        group.cities.add(row.city);
+        groups.set(row.area_code, group);
+      }
+      offset += data.length;
     }
   }
-  return map;
+  return new Map([...groups].map(([key, value]) => [key, {
+    state: value.states.size === 1 ? [...value.states][0] : null,
+    city: value.cities.size === 1 ? [...value.cities][0] : null,
+  }]));
 }
 
 /** Process a batch of raw phone-number strings (≤ a few thousand per call). */
@@ -76,7 +94,7 @@ export async function processRows(rawRows: string[]): Promise<ProcessedRow[]> {
 
   const [lineTypeMap, areaMap] = await Promise.all([
     npaNxxList.length ? loadLineTypes(npaNxxList) : Promise.resolve(new Map<string, LineType>()),
-    npaList.length ? loadAreaCodes(npaList) : Promise.resolve(new Map<string, { state: string; city: string }>()),
+    npaList.length ? loadAreaCodes(npaList) : Promise.resolve(new Map<string, { state: string | null; city: string | null }>()),
   ]);
 
   return rawRows.map((raw, i) => {
