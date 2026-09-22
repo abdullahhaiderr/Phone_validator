@@ -1,5 +1,14 @@
 # US Phone Number Validator & Classifier Dashboard
 
+## Free bulk processing
+
+- No paid lookup service is enabled. Mobile and landline CSV exports use original block estimates; unknowns remain unknown.
+- Repeated phone cells are normalized once per batch and each distinct cleaned number is validated once. All original rows remain available for duplicate reporting and export.
+- Public prefix/area reference lookups are cached for five minutes in each warm server process (bounded to 10,000 prefixes and 1,000 areas). No uploaded full phone numbers enter this cache. Cold starts query Supabase again.
+- The importer now supports the upstream compressed `data.json` plus matching `meta.json`, including PCS and independent telephone company labels. Conflicting labels for one prefix remain unknown. This repairs refreshes; it does not make the old public source current.
+- For a local compressed dataset use `TEL_CARRIER_DATA=./data.json TEL_CARRIER_META=./meta.json npm run import-data -- --nxx-only`.
+- A 20,000-row batch-sequence test checks row preservation, invalid handling and reference-query reuse. Hosting/database free-tier limits still apply.
+
 ## Accuracy update
 
 - Validation now uses pinned `libphonenumber-js/max` numbering metadata, rejects reserved fictional numbers and service exchanges, and accepts US numbers only. `Valid` does **not** prove a number is assigned, active or reachable. Non-US +1 numbers are outside this app's scope.

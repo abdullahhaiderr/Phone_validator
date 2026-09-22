@@ -125,7 +125,17 @@ async function importAreaCodes() {
 async function importNpaNxx() {
   console.log("\n[2/2] Importing NPA-NXX → line type …");
   const text = await fetchText(TEL_CARRIER_SOURCES, "tel-carrier-db data");
-  const normalized = normalizeTelCarrierData(JSON.parse(text));
+  const json = JSON.parse(text);
+  let meta;
+  if (json.list) {
+    // Upstream stores type indexes; local overrides need matching metadata.
+    const metaSources = process.env.TEL_CARRIER_DATA
+      ? [process.env.TEL_CARRIER_META].filter(Boolean)
+      : ["https://raw.githubusercontent.com/coolaj86/tel-carrier-db/master/meta.json"];
+    if (!metaSources.length) throw new Error("Set TEL_CARRIER_META to the matching meta.json");
+    meta = JSON.parse(await fetchText(metaSources, "carrier metadata"));
+  }
+  const normalized = normalizeTelCarrierData(json, meta);
   const entries = Object.entries(normalized);
   console.log(`  Parsed ${entries.length} NPA-NXX blocks. Upserting …`);
   const rows = entries.map(([npaNxx, rawType]) => ({

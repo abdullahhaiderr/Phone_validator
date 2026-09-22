@@ -1,4 +1,5 @@
 const Papa = require("papaparse");
+const { mapCarrierTypeToLineType } = require("../lib/carrierTypes");
 const STATES = Object.fromEntries(("Alabama:AL|Alaska:AK|Arizona:AZ|Arkansas:AR|California:CA|Colorado:CO|Connecticut:CT|Delaware:DE|District of Columbia:DC|Florida:FL|Georgia:GA|Hawaii:HI|Idaho:ID|Illinois:IL|Indiana:IN|Iowa:IA|Kansas:KS|Kentucky:KY|Louisiana:LA|Maine:ME|Maryland:MD|Massachusetts:MA|Michigan:MI|Minnesota:MN|Mississippi:MS|Missouri:MO|Montana:MT|Nebraska:NE|Nevada:NV|New Hampshire:NH|New Jersey:NJ|New Mexico:NM|New York:NY|North Carolina:NC|North Dakota:ND|Ohio:OH|Oklahoma:OK|Oregon:OR|Pennsylvania:PA|Rhode Island:RI|South Carolina:SC|South Dakota:SD|Tennessee:TN|Texas:TX|Utah:UT|Vermont:VT|Virginia:VA|Washington:WA|West Virginia:WV|Wisconsin:WI|Wyoming:WY").split("|").map(v => v.split(":")));
 
 function parseAreaCodes(text) {
@@ -15,14 +16,28 @@ function parseAreaCodes(text) {
   return [...rows.values()];
 }
 
-function normalizeTelCarrierData(json) {
+function normalizeTelCarrierData(json, meta) {
   const out = {};
   const keyOf = v => String(v ?? "").replace(/[\s-]/g, "");
   const add = (key, type) => {
     key = keyOf(key);
-    if (/^[2-9]\d{2}[2-9]\d{2}$/.test(key)) out[key] = type;
+    if (/^[2-9]\d{2}[2-9]\d{2}$/.test(key)) {
+      if (Object.prototype.hasOwnProperty.call(out, key) &&
+          mapCarrierTypeToLineType(out[key]) !== mapCarrierTypeToLineType(type)) out[key] = "unknown";
+      else if (!Object.prototype.hasOwnProperty.call(out, key)) out[key] = type;
+    }
   };
-  if (Array.isArray(json)) {
+  if (json?.list && typeof json.list === "object") {
+    if (!Array.isArray(meta?.types)) throw new Error("Compressed carrier data requires matching meta.json types");
+    for (const [npa, rows] of Object.entries(json.list)) {
+      if (!/^[2-9]\d{2}$/.test(npa) || !Array.isArray(rows)) continue;
+      for (const row of rows) {
+        if (!Array.isArray(row) || !Number.isInteger(row[5]) || typeof meta.types[row[5]] !== "string")
+          throw new Error("Invalid carrier type index; database unchanged");
+        add(`${npa}${row[0]}`, meta.types[row[5]]);
+      }
+    }
+  } else if (Array.isArray(json)) {
     for (const item of json) {
       if (!item || typeof item !== "object") continue;
       add(item.npa_nxx ?? item.npanxx ?? item.block ??

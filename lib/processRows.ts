@@ -8,6 +8,11 @@
 import { getServiceClient } from "./supabase";
 import { cleanPhone, isValidNanp } from "./phone";
 import type { LineType } from "./classifyLineType";
+import { ReferenceCache } from "./referenceCache";
+
+const lineCache = new ReferenceCache<LineType>();
+type Area = { state: string | null; city: string | null };
+const areaCache = new ReferenceCache<Area>(1000);
 
 export interface ProcessedRow {
   original_number: string;
@@ -19,19 +24,17 @@ export interface ProcessedRow {
   city: string | null;
 }
 
-/** When a block has several rows, prefer the "most important" classification. */
-const LINE_TYPE_PRIORITY: Record<LineType, number> = {
-  cellular: 0, // main use case → win ties
-  landline: 1,
-  voip: 2,
-  unknown: 3,
-};
-
 const IN_CHUNK = 500; // stay under PostgREST's default URL-length limits
 
 async function loadLineTypes(npaNxxList: string[]): Promise<Map<string, LineType>> {
   const supabase = getServiceClient();
   const map = new Map<string, LineType>();
+  for (const key of npaNxxList) {
+    const value = lineCache.get(key);
+    if (value !== undefined) map.set(key, value);
+  }
+  const requested = npaNxxList;
+  npaNxxList = requested.filter(key => !map.has(key));
   for (let i = 0; i < npaNxxList.length; i += IN_CHUNK) {
     const { data, error } = await supabase
       .from("npa_nxx_line_type")
@@ -39,21 +42,29 @@ async function loadLineTypes(npaNxxList: string[]): Promise<Map<string, LineType
       .in("npa_nxx", npaNxxList.slice(i, i + IN_CHUNK));
     if (error) throw new Error(`npa_nxx_line_type lookup failed: ${error.message}`);
     for (const row of data ?? []) {
-      const existing = map.get(row.npa_nxx);
       // Legacy importer guessed CLEC/reseller = VoIP and discarded the raw label.
       // Without provenance those rows cannot safely assert VoIP.
       const incoming: LineType = row.source === "tel-carrier-db" && row.line_type === "voip"
         ? "unknown" : row.line_type as LineType;
-      // keep highest-priority classification if the block appears more than once
-      if (!existing || LINE_TYPE_PRIORITY[incoming] < LINE_TYPE_PRIORITY[existing]) {
-        map.set(row.npa_nxx, incoming);
-      }
+      map.set(row.npa_nxx, incoming);
     }
+  }
+  // Cache missing prefixes only after all database queries succeed.
+  for (const key of npaNxxList) {
+    const value = map.get(key) ?? "unknown";
+    lineCache.set(key, value);
+    map.set(key, value);
   }
   return map;
 }
 
 async function loadAreaCodes(npaList: string[]): Promise<Map<string, { state: string | null; city: string | null }>> {
+  const cached = new Map<string, Area>();
+  for (const key of npaList) {
+    const value = areaCache.get(key);
+    if (value !== undefined) cached.set(key, value);
+  }
+  npaList = npaList.filter(key => !cached.has(key));
   const supabase = getServiceClient();
   const groups = new Map<string, { states: Set<string>; cities: Set<string> }>();
   // Area codes have many city rows. Page explicitly rather than losing rows to
@@ -78,16 +89,29 @@ async function loadAreaCodes(npaList: string[]): Promise<Map<string, { state: st
       offset += data.length;
     }
   }
-  return new Map([...groups].map(([key, value]) => [key, {
+  const fetched = new Map<string, Area>([...groups].map(([key, value]) => [key, {
     state: value.states.size === 1 ? [...value.states][0] : null,
     city: value.cities.size === 1 ? [...value.cities][0] : null,
   }]));
+  for (const key of npaList) {
+    const value = fetched.get(key) ?? { state: null, city: null };
+    areaCache.set(key, value);
+    cached.set(key, value);
+  }
+  return cached;
 }
 
 /** Process a batch of raw phone-number strings (≤ a few thousand per call). */
 export async function processRows(rawRows: string[]): Promise<ProcessedRow[]> {
-  const cleaned = rawRows.map((r) => cleanPhone(String(r ?? "")));
-  const validDigits = cleaned.filter(isValidNanp);
+  // Reuse work for repeated cells/numbers, preserving every uploaded row.
+  const normalized = new Map<string, string>();
+  const cleaned = rawRows.map(r => {
+    const raw = String(r ?? "");
+    if (!normalized.has(raw)) normalized.set(raw, cleanPhone(raw));
+    return normalized.get(raw)!;
+  });
+  const validity = new Map([...new Set(cleaned)].map(d => [d, isValidNanp(d)]));
+  const validDigits = [...validity].filter(([, valid]) => valid).map(([d]) => d);
 
   const npaNxxList = [...new Set(validDigits.map((d) => d.slice(0, 6)))];
   const npaList = [...new Set(validDigits.map((d) => d.slice(0, 3)))];
@@ -99,7 +123,7 @@ export async function processRows(rawRows: string[]): Promise<ProcessedRow[]> {
 
   return rawRows.map((raw, i) => {
     const digits = cleaned[i];
-    const valid = isValidNanp(digits);
+    const valid = validity.get(digits)!;
     const area = valid ? areaMap.get(digits.slice(0, 3)) : undefined;
     return {
       original_number: String(raw ?? "").slice(0, 60),
